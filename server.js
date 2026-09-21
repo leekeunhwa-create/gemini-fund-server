@@ -6,8 +6,28 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 환경 변수에서 API 키 불러오기
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+
+// API 호출 및 재시도 로직
+async function generateWithRetry(prompt) {
+    // 503 과부하 시 안정적으로 대응하는 모델 목록
+    const modelsToTry = ['gemini-3.6-flash', 'gemini-2.0-flash-exp', 'gemini-1.5-flash'];
+    
+    for (const modelName of modelsToTry) {
+        try {
+            const model = genAI.getGenerativeModel({ 
+                model: modelName,
+                generationConfig: { responseMimeType: "application/json" }
+            });
+            const result = await model.generateContent(prompt);
+            return result.response.text();
+        } catch (err) {
+            console.warn(`[Model ${modelName} Failed]:`, err.message);
+            // 다음 모델로 넘어가서 재시도
+        }
+    }
+    throw new Error("모든 AI 모델 응답에 실패했습니다.");
+}
 
 app.post('/api/evaluate', async (req, res) => {
     try {
@@ -43,20 +63,13 @@ ${systemInstruction}
 이 설득이 논리적으로 타당한지 심사하고 지정된 JSON으로만 응답해라.
 `;
 
-        const model = genAI.getGenerativeModel({ 
-            model: 'gemini-3.6-flash',
-            generationConfig: { responseMimeType: "application/json" }
-        });
-
-        const result = await model.generateContent(prompt);
-        const responseText = result.response.text();
-        
+        const responseText = await generateWithRetry(prompt);
         const resultJson = JSON.parse(responseText);
         res.json(resultJson);
 
     } catch (error) {
         console.error("Gemini API Error:", error);
-        res.status(500).json({ status: "REJECT", feedback: "AI 고객과의 통신 중 오류가 발생했습니다. 입력한 내용을 다시 확인해주세요." });
+        res.status(500).json({ status: "REJECT", feedback: "AI 고객이 잠시 바쁩니다. 다시 한번 전송 버튼을 눌러주세요!" });
     }
 });
 
