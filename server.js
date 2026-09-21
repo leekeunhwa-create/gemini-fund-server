@@ -1,12 +1,13 @@
 const express = require('express');
 const cors = require('cors');
-const { GoogleGenAI } = require('@google/genai');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+// 환경 변수에서 API 키 불러오기
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
 app.post('/api/evaluate', async (req, res) => {
     try {
@@ -30,30 +31,32 @@ app.post('/api/evaluate', async (req, res) => {
 `;
 
         const prompt = `
+[지침]
+${systemInstruction}
+
 [현재 상황]
 - 라운드: ${roundNumber}라운드
 - 시장 뉴스: ${roundNews}
 - 학생이 설정한 포트폴리오: 예금 ${portfolio.deposit}원, 주식 ${portfolio.stock}원, 코인/벤처 ${portfolio.crypto}원
 - 학생의 설득 메시지: "${userReason}"
 
-이 설득이 논리적으로 타당한지 심사하고 지정된 JSON으로 응답해라.
+이 설득이 논리적으로 타당한지 심사하고 지정된 JSON으로만 응답해라.
 `;
 
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt,
-            config: {
-                systemInstruction: systemInstruction,
-                responseMimeType: 'application/json'
-            }
+        const model = genAI.getGenerativeModel({ 
+            model: 'gemini-1.5-flash',
+            generationConfig: { responseMimeType: "application/json" }
         });
 
-        const resultJson = JSON.parse(response.text);
+        const result = await model.generateContent(prompt);
+        const responseText = result.response.text();
+        
+        const resultJson = JSON.parse(responseText);
         res.json(resultJson);
 
     } catch (error) {
         console.error("Gemini API Error:", error);
-        res.status(500).json({ status: "REJECT", feedback: "AI 고객과의 통신 중 오류가 발생했습니다. 다시 시도해주세요." });
+        res.status(500).json({ status: "REJECT", feedback: "AI 고객과의 통신 중 오류가 발생했습니다. 입력한 내용을 다시 확인해주세요." });
     }
 });
 
