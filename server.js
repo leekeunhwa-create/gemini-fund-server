@@ -8,37 +8,29 @@ app.use(express.json());
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// 실제 유료 키에서 404 안 나는 정상 활성 모델 목록
-const MODEL_CANDIDATES = [
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
-    "gemini-3.6-flash"
-];
+// gemini-3.6-flash 단일 모델로 성공할 때까지 반복 재시도
+async function generateWithRetry(prompt, maxRetries = 5) {
+    const model = genAI.getGenerativeModel({ 
+        model: "gemini-3.6-flash",
+        generationConfig: { responseMimeType: "application/json" }
+    });
 
-async function generateWithFallback(prompt) {
-    let lastError = null;
-
-    for (const modelName of MODEL_CANDIDATES) {
+    for (let i = 1; i <= maxRetries; i++) {
         try {
-            console.log(`[모델 시도 중]: ${modelName}`);
-            const model = genAI.getGenerativeModel({ 
-                model: modelName,
-                generationConfig: { responseMimeType: "application/json" }
-            });
-
+            console.log(`[gemini-3.6-flash 호출 시도 ${i}/${maxRetries}]`);
             const result = await model.generateContent(prompt);
-            console.log(`[성공]: ${modelName} 모델로 응답 완료!`);
+            console.log(`[성공]: ${i}번째 시도에서 응답 수신 완료!`);
             return result.response.text();
-
         } catch (error) {
-            console.warn(`[${modelName} 실패 (${error.status || 'ERROR'})]: 다음 모델로 우회합니다.`);
-            lastError = error;
-            // 503 과부하 풀림 대기 시간 1.5초
-            await new Promise(res => setTimeout(res, 1500));
+            console.warn(`[시도 ${i} 실패 (${error.status || 'ERROR'})]: ${error.message}`);
+            if (i < maxRetries) {
+                console.log(`2초 후 재시도합니다...`);
+                await new Promise(res => setTimeout(res, 2000));
+            } else {
+                throw error;
+            }
         }
     }
-
-    throw lastError;
 }
 
 app.post('/api/evaluate', async (req, res) => {
@@ -68,7 +60,7 @@ app.post('/api/evaluate', async (req, res) => {
 }
 `;
 
-        const responseText = await generateWithFallback(prompt);
+        const responseText = await generateWithRetry(prompt);
         const resultJson = JSON.parse(responseText);
 
         res.json(resultJson);
