@@ -8,11 +8,11 @@ app.use(express.json());
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// 시도할 모델 목록 (3.6-flash -> 1.5-pro -> 2.0-flash-exp 순서로 자동 전환)
+// 실제 유료 키에서 404 안 나는 정상 활성 모델 목록
 const MODEL_CANDIDATES = [
-    "gemini-3.6-flash",
-    "gemini-1.5-pro",
-    "gemini-2.0-flash-exp"
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-3.6-flash"
 ];
 
 async function generateWithFallback(prompt) {
@@ -27,14 +27,14 @@ async function generateWithFallback(prompt) {
             });
 
             const result = await model.generateContent(prompt);
-            console.log(`[성공]: ${modelName} 모델로 응답 완료`);
+            console.log(`[성공]: ${modelName} 모델로 응답 완료!`);
             return result.response.text();
 
         } catch (error) {
             console.warn(`[${modelName} 실패 (${error.status || 'ERROR'})]: 다음 모델로 우회합니다.`);
             lastError = error;
-            // 다음 모델로 넘어가기 전 0.5초 미세 대기
-            await new Promise(res => setTimeout(res, 500));
+            // 503 과부하 풀림 대기 시간 1.5초
+            await new Promise(res => setTimeout(res, 1500));
         }
     }
 
@@ -77,7 +77,7 @@ app.post('/api/evaluate', async (req, res) => {
         console.error("Server Final Error:", error);
         res.status(500).json({ 
             status: "REJECT", 
-            feedback: "AI 응답 지연이 발생했습니다. 전송 버튼을 한 번 더 눌러주세요!" 
+            feedback: "AI 고객 응답 처리 중 일시적 지연이 발생했습니다. 전송 버튼을 한 번 더 눌러주세요!" 
         });
     }
 });
