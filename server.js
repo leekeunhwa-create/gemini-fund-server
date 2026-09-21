@@ -5,53 +5,36 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 503 및 과부하 대비 백오프(Backoff) 자동 재시도 함수
-async function callGeminiApiWithFallback(prompt) {
-    const apiKey = process.env.GEMINI_API_KEY;
+// Groq API (Llama 3.3 70B Versatile 모델 사용)
+async function callGroqApi(prompt) {
+    const apiKey = process.env.GROQ_API_KEY || process.env.GEMINI_API_KEY;
     if (!apiKey) {
-        throw new Error("GEMINI_API_KEY가 Render 환경변수에 설정되지 않았습니다.");
+        throw new Error("GROQ_API_KEY가 Render 환경변수에 설정되지 않았습니다.");
     }
 
-    // 시도해볼 모델 순서
-    const models = ['gemini-3.6-flash', 'gemini-1.5-flash-latest'];
+    const url = "https://api.groq.com/openai/v1/chat/completions";
 
-    for (const modelName of models) {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+            model: "llama-3.3-70b-versatile",
+            messages: [{ role: "user", content: prompt }],
+            response_format: { type: "json_object" }
+        })
+    });
 
-        // 모델별 최대 3회 재시도 (대기시간 2초, 4초, 6초)
-        for (let attempt = 1; attempt <= 3; attempt++) {
-            try {
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{ parts: [{ text: prompt }] }],
-                        generationConfig: { responseMimeType: "application/json" }
-                    })
-                });
-
-                if (response.status === 503) {
-                    console.warn(`[${modelName}] 503 과부하 발생 (${attempt}/3). ${attempt * 2}초 후 재시도...`);
-                    await new Promise(res => setTimeout(res, attempt * 2000));
-                    continue;
-                }
-
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    console.error(`[${modelName}] Error ${response.status}:`, errorText);
-                    break; // 404 등 기타 에러는 다음 모델로 넘어감
-                }
-
-                const data = await response.json();
-                return data.candidates[0].content.parts[0].text;
-
-            } catch (err) {
-                console.error(`[${modelName}] Network error:`, err.message);
-            }
-        }
+    if (!response.ok) {
+        const errorText = await response.text();
+        console.error("Groq API Error Response:", response.status, errorText);
+        throw new Error(`Groq API Error: ${response.status}`);
     }
 
-    throw new Error("Google AI 서버 과부하로 응답을 받지 못했습니다. 잠시 후 다시 눌러주세요.");
+    const data = await response.json();
+    return data.choices[0].message.content;
 }
 
 app.post('/api/evaluate', async (req, res) => {
@@ -87,13 +70,13 @@ ${systemInstruction}
 이 설득이 논리적으로 타당한지 심사하고 지정된 JSON으로만 응답해라.
 `;
 
-        const responseText = await callGeminiApiWithFallback(prompt);
+        const responseText = await callGroqApi(prompt);
         const resultJson = JSON.parse(responseText);
         res.json(resultJson);
 
     } catch (error) {
         console.error("Server Internal Error:", error.message);
-        res.status(500).json({ status: "REJECT", feedback: error.message });
+        res.status(500).json({ status: "REJECT", feedback: `AI 통신 에러가 발생했습니다: ${error.message}` });
     }
 });
 
