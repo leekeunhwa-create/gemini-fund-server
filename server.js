@@ -15,7 +15,7 @@ app.post('/api/evaluate', async (req, res) => {
 
         // Gemini 1.5 Flash 모델 초기화
         const model = genAI.getGenerativeModel({ 
-            model: "gemini-1.5-flash",
+            model: "gemini-2.0-flash",
             generationConfig: { responseMimeType: "application/json" }
         });
 
