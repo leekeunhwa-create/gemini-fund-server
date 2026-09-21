@@ -5,37 +5,51 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 구글 Gemini API 직접 호출 함수
-async function callGeminiApi(prompt) {
+// 구글 Gemini API REST 직접 호출 함수 (자동 재시도 포함)
+async function callGeminiApi(prompt, retries = 3) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-        throw new Error("GEMINI_API_KEY가 설정되지 않았습니다.");
+        throw new Error("GEMINI_API_KEY가 Render 환경변수에 설정되지 않았습니다.");
     }
 
-    // Google REST API 엔드포인트 (가장 기본적이고 유효한 엔드포인트)
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+    // 구글 지정 최신 REST API 엔드포인트 (gemini-3.6-flash)
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`;
 
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            contents: [{
-                parts: [{ text: prompt }]
-            }],
-            generationConfig: {
-                responseMimeType: "application/json"
+    for (let i = 0; i < retries; i++) {
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{
+                        parts: [{ text: prompt }]
+                    }],
+                    generationConfig: {
+                        responseMimeType: "application/json"
+                    }
+                })
+            });
+
+            if (response.status === 503 && i < retries - 1) {
+                // 503(과부하) 발생 시 1초 대기 후 재시도
+                console.warn(`[Gemini 503 Overload] 1초 후 자동 재시도 (${i + 1}/${retries})...`);
+                await new Promise(res => setTimeout(res, 1000));
+                continue;
             }
-        })
-    });
 
-    if (!response.ok) {
-        const errorText = await response.text();
-        console.error("Gemini API Direct Response Error:", response.status, errorText);
-        throw new Error(`Gemini API HTTP Error: ${response.status}`);
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error("Gemini API Error Response:", response.status, errorText);
+                throw new Error(`Gemini API HTTP Error: ${response.status}`);
+            }
+
+            const data = await response.json();
+            return data.candidates[0].content.parts[0].text;
+
+        } catch (err) {
+            if (i === retries - 1) throw err;
+        }
     }
-
-    const data = await response.json();
-    return data.candidates[0].content.parts[0].text;
 }
 
 app.post('/api/evaluate', async (req, res) => {
