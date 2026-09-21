@@ -6,18 +6,28 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 환경변수에서 키 가져오기 (AQ.Ab... 형태의 신규 유료 키 지원)
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+// 503 과부하 발생 시 자동으로 재시도하는 함수
+async function generateWithRetry(model, prompt, retries = 3) {
+    for (let i = 0; i < retries; i++) {
+        try {
+            const result = await model.generateContent(prompt);
+            return result.response.text();
+        } catch (error) {
+            if (error.status === 503 && i < retries - 1) {
+                console.warn(`[503 과부하 감지] 1초 후 재시도합니다... (${i + 1}/${retries})`);
+                await new Promise(res => setTimeout(res, 1000));
+            } else {
+                throw error;
+            }
+        }
+    }
+}
 
 app.post('/api/evaluate', async (req, res) => {
     try {
         const { roundNews, portfolio, userReason, roundNumber } = req.body;
-
-        // Gemini 1.5 Flash 모델 초기화
-        const model = genAI.getGenerativeModel({ 
-            model: "gemini-3.6-flash",
-            generationConfig: { responseMimeType: "application/json" }
-        });
 
         const prompt = `
 너는 자산 관리를 맡긴 깐깐하고 논리적인 AI 투자 고객이다.
@@ -42,8 +52,13 @@ app.post('/api/evaluate', async (req, res) => {
 }
 `;
 
-        const result = await model.generateContent(prompt);
-        const responseText = result.response.text();
+        // 가장 안정적인 gemini-1.5-flash 모델 지정
+        const model = genAI.getGenerativeModel({ 
+            model: "gemini-1.5-flash",
+            generationConfig: { responseMimeType: "application/json" }
+        });
+
+        const responseText = await generateWithRetry(model, prompt);
         const resultJson = JSON.parse(responseText);
 
         res.json(resultJson);
@@ -52,7 +67,7 @@ app.post('/api/evaluate', async (req, res) => {
         console.error("Server Internal Error:", error);
         res.status(500).json({ 
             status: "REJECT", 
-            feedback: "AI 고객이 응답을 처리하는 중입니다. 잠시 후 전송 버튼을 한 번 더 눌러주세요!" 
+            feedback: "AI 고객이 응답을 처리하는 중입니다. 전송 버튼을 한 번 더 눌러주세요!" 
         });
     }
 });
