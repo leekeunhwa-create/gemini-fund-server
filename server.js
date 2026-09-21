@@ -8,16 +8,19 @@ app.use(express.json());
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// 503 과부하 시 최대 3번까지 1.5초 간격으로 자동 재시도
+// 503 및 네트워크 일시 오류 시 지수 백오프 적용 (2초 -> 4초 -> 8초)
 async function generateWithRetry(model, prompt, retries = 3) {
     for (let i = 0; i < retries; i++) {
         try {
             const result = await model.generateContent(prompt);
             return result.response.text();
         } catch (error) {
-            if (error.status === 503 && i < retries - 1) {
-                console.warn(`[503 과부하 감지] 1.5초 후 재시도합니다... (${i + 1}/${retries})`);
-                await new Promise(res => setTimeout(res, 1500));
+            console.warn(`[API 호출 시도 ${i + 1}/${retries} 실패]:`, error.message || error);
+            
+            if (i < retries - 1) {
+                const delay = Math.pow(2, i + 1) * 1000; // 2초, 4초, 8초 대기
+                console.log(`${delay / 1000}초 후 재시도합니다...`);
+                await new Promise(res => setTimeout(res, delay));
             } else {
                 throw error;
             }
@@ -52,7 +55,6 @@ app.post('/api/evaluate', async (req, res) => {
 }
 `;
 
-        // 인식되는 모델명인 gemini-3.6-flash 사용
         const model = genAI.getGenerativeModel({ 
             model: "gemini-3.6-flash",
             generationConfig: { responseMimeType: "application/json" }
@@ -64,10 +66,10 @@ app.post('/api/evaluate', async (req, res) => {
         res.json(resultJson);
 
     } catch (error) {
-        console.error("Server Internal Error:", error);
+        console.error("Server Final Error:", error);
         res.status(500).json({ 
             status: "REJECT", 
-            feedback: "AI 고객 응답 처리 중 일시적 지연이 발생했습니다. 전송 버튼을 한 번 더 눌러주세요!" 
+            feedback: "AI 응답 지연이 발생했습니다. 전송 버튼을 한 번 더 눌러주세요!" 
         });
     }
 });
