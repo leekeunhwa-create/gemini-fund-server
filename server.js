@@ -1,78 +1,64 @@
 const express = require('express');
 const cors = require('cors');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
-// gemini-3.6-flash 단일 모델로 성공할 때까지 반복 재시도
-async function generateWithRetry(prompt, maxRetries = 5) {
-    const model = genAI.getGenerativeModel({ 
-        model: "gemini-3.6-flash",
-        generationConfig: { responseMimeType: "application/json" }
-    });
-
-    for (let i = 1; i <= maxRetries; i++) {
-        try {
-            console.log(`[gemini-3.6-flash 호출 시도 ${i}/${maxRetries}]`);
-            const result = await model.generateContent(prompt);
-            console.log(`[성공]: ${i}번째 시도에서 응답 수신 완료!`);
-            return result.response.text();
-        } catch (error) {
-            console.warn(`[시도 ${i} 실패 (${error.status || 'ERROR'})]: ${error.message}`);
-            if (i < maxRetries) {
-                console.log(`2초 후 재시도합니다...`);
-                await new Promise(res => setTimeout(res, 2000));
-            } else {
-                throw error;
-            }
-        }
-    }
-}
-
-app.post('/api/evaluate', async (req, res) => {
+app.post('/api/evaluate', (req, res) => {
     try {
-        const { roundNews, portfolio, userReason, roundNumber } = req.body;
+        const { roundNews, portfolioOption, userReason, roundNumber } = req.body;
 
-        const prompt = `
-너는 자산 관리를 맡긴 깐깐하고 논리적인 AI 투자 고객이다.
-현재 펀드매니저(학생)가 자산 배분 후 너에게 설득 메시지를 보냈다.
+        // 이유 작성이 너무 짧은 경우 거절 처리 (최소 10자 이상)
+        if (!userReason || userReason.trim().length < 10) {
+            return res.json({
+                status: "REJECT",
+                feedback: "AI 고객: '이유가 너무 성의없습니다! 최소 10자 이상 논리적으로 나를 설득해보세요.'"
+            });
+        }
 
-[판단 기준]
-1. 단순히 얼마를 넣었다는 숫자 나열이나 '믿어달라', '안전하다' 같은 단순 장담은 반드시 거절(REJECT)해라.
-2. 제시된 시장 뉴스(경제 상황)와 본인이 배분한 포트폴리오 비중 간의 '원인과 결과(논리적 이유)'가 명확히 연결되어야 승인(APPROVE)해라.
-3. 핑계나 얼버무림, 맥락에 맞지 않는 답은 구체적으로 꼬집어서 지적해라.
+        // 라운드별/선택지별 조건부 피드백 (선택한 객관식 옵션에 따라 달라짐)
+        let isApproved = true;
+        let feedbackMessage = "";
 
-[현재 상황]
-- 라운드: ${roundNumber}라운드
-- 시장 뉴스: ${roundNews}
-- 학생이 설정한 포트폴리오: 예금 ${portfolio.deposit}원, 주식 ${portfolio.stock}원, 코인/벤처 ${portfolio.crypto}원
-- 학생의 설득 메시지: "${userReason}"
+        // 포트폴리오 선택지 타입에 따른 논리 평가 (프론트에서 넘어오는 option 값)
+        if (portfolioOption === "STABLE") { // 안전형 (예금 중심)
+            isApproved = true;
+            feedbackMessage = "AI 고객: '원금을 지키면서 안정적인 수익을 노리는 합리적인 선택이군요. 승인합니다!'";
+        } else if (portfolioOption === "BALANCED") { // 중립형 (주식/예금 분산)
+            isApproved = true;
+            feedbackMessage = "AI 고객: '시장 상황에 맞게 위험을 잘 분산했네요. 설득력이 있습니다. 승인!'";
+        } else if (portfolioOption === "AGGRESSIVE") { // 공격형 (코인/주식 중심)
+            // 작성한 이유에 특정 키워드(분석, 대응, 호재, 전략)가 포함되었는지 간단 확인
+            const keywords = ["뉴스", "분석", "대응", "상승", "하락", "전략", "원인", "이유"];
+            const hasKeyword = keywords.some(kw => userReason.includes(kw));
 
-[응답 포맷]
-반드시 아래 JSON 형태로만 응답해라. 다른 말은 덧붙이지 마라.
-{
-  "status": "APPROVE" 또는 "REJECT",
-  "feedback": "고객 입장에서 학생에게 할 말 (승인 시 감사 인사, 거절 시 깐깐한 지적과 이유 요구)"
-}
-`;
+            if (hasKeyword) {
+                isApproved = true;
+                feedbackMessage = "AI 고객: '공격적인 투자지만, 제시한 뉴스 분석 이유가 꽤 논리적이군요. 위험을 감수하고 승인하겠습니다!'";
+            } else {
+                isApproved = false;
+                feedbackMessage = "AI 고객: '위험 자산 비중이 너무 높은데, 뉴스에 기반한 근거가 부족합니다. 조금 더 논리적으로 작성해서 다시 제출하세요.'";
+            }
+        } else {
+            isApproved = true;
+            feedbackMessage = "AI 고객: '제시하신 포트폴리오 전략과 이유를 검토했습니다. 승인합니다!'";
+        }
 
-        const responseText = await generateWithRetry(prompt);
-        const resultJson = JSON.parse(responseText);
-
-        res.json(resultJson);
+        // 결과 반환 (AI 응답과 동일한 형태)
+        res.json({
+            status: isApproved ? "APPROVE" : "REJECT",
+            feedback: feedbackMessage
+        });
 
     } catch (error) {
-        console.error("Server Final Error:", error);
-        res.status(500).json({ 
-            status: "REJECT", 
-            feedback: "AI 고객 응답 처리 중 일시적 지연이 발생했습니다. 전송 버튼을 한 번 더 눌러주세요!" 
+        console.error("Evaluation Error:", error);
+        res.status(500).json({
+            status: "REJECT",
+            feedback: "평가 처리 중 오류가 발생했습니다. 다시 시도해 주세요."
         });
     }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Static Logic Server running on port ${PORT}`));
