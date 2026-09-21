@@ -1,32 +1,41 @@
 const express = require('express');
 const cors = require('cors');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
-
-// API 호출 및 재시도 로직
-async function generateWithRetry(prompt) {
-    // 503 과부하 시 안정적으로 대응하는 모델 목록
-    const modelsToTry = ['gemini-3.6-flash', 'gemini-2.0-flash-exp', 'gemini-1.5-flash'];
-    
-    for (const modelName of modelsToTry) {
-        try {
-            const model = genAI.getGenerativeModel({ 
-                model: modelName,
-                generationConfig: { responseMimeType: "application/json" }
-            });
-            const result = await model.generateContent(prompt);
-            return result.response.text();
-        } catch (err) {
-            console.warn(`[Model ${modelName} Failed]:`, err.message);
-            // 다음 모델로 넘어가서 재시도
-        }
+// 구글 Gemini API 직접 호출 함수
+async function callGeminiApi(prompt) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+        throw new Error("GEMINI_API_KEY가 설정되지 않았습니다.");
     }
-    throw new Error("모든 AI 모델 응답에 실패했습니다.");
+
+    // Google REST API 엔드포인트 (가장 기본적이고 유효한 엔드포인트)
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            contents: [{
+                parts: [{ text: prompt }]
+            }],
+            generationConfig: {
+                responseMimeType: "application/json"
+            }
+        })
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        console.error("Gemini API Direct Response Error:", response.status, errorText);
+        throw new Error(`Gemini API HTTP Error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.candidates[0].content.parts[0].text;
 }
 
 app.post('/api/evaluate', async (req, res) => {
@@ -51,7 +60,6 @@ app.post('/api/evaluate', async (req, res) => {
 `;
 
         const prompt = `
-[지침]
 ${systemInstruction}
 
 [현재 상황]
@@ -63,13 +71,13 @@ ${systemInstruction}
 이 설득이 논리적으로 타당한지 심사하고 지정된 JSON으로만 응답해라.
 `;
 
-        const responseText = await generateWithRetry(prompt);
+        const responseText = await callGeminiApi(prompt);
         const resultJson = JSON.parse(responseText);
         res.json(resultJson);
 
     } catch (error) {
-        console.error("Gemini API Error:", error);
-        res.status(500).json({ status: "REJECT", feedback: "AI 고객이 잠시 바쁩니다. 다시 한번 전송 버튼을 눌러주세요!" });
+        console.error("Server Internal Error:", error.message);
+        res.status(500).json({ status: "REJECT", feedback: `AI 통신 에러가 발생했습니다: ${error.message}` });
     }
 });
 
