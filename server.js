@@ -1,43 +1,23 @@
 const express = require('express');
 const cors = require('cors');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-async function callGeminiApi(prompt) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-        throw new Error("GEMINI_API_KEY가 설정되지 않았습니다.");
-    }
-
-    // Gemini 1.5 Flash 공식 API 엔드포인트
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
-
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-                responseMimeType: "application/json"
-            }
-        })
-    });
-
-    if (!response.ok) {
-        const errorText = await response.text();
-        console.error("Gemini API Error Response:", response.status, errorText);
-        throw new Error(`Gemini API Error: ${response.status}`);
-    }
-
-    const data = await response.json();
-    return data.candidates[0].content.parts[0].text;
-}
+// 환경변수에서 키 가져오기 (AQ.Ab... 형태의 신규 유료 키 지원)
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 app.post('/api/evaluate', async (req, res) => {
     try {
         const { roundNews, portfolio, userReason, roundNumber } = req.body;
+
+        // Gemini 1.5 Flash 모델 초기화
+        const model = genAI.getGenerativeModel({ 
+            model: "gemini-1.5-flash",
+            generationConfig: { responseMimeType: "application/json" }
+        });
 
         const prompt = `
 너는 자산 관리를 맡긴 깐깐하고 논리적인 AI 투자 고객이다.
@@ -62,15 +42,17 @@ app.post('/api/evaluate', async (req, res) => {
 }
 `;
 
-        const responseText = await callGeminiApi(prompt);
+        const result = await model.generateContent(prompt);
+        const responseText = result.response.text();
         const resultJson = JSON.parse(responseText);
+
         res.json(resultJson);
 
     } catch (error) {
-        console.error("Server Internal Error:", error.message);
+        console.error("Server Internal Error:", error);
         res.status(500).json({ 
             status: "REJECT", 
-            feedback: "AI 고객이 응답을 처리하는 중입니다. 전송 버튼을 한 번 더 눌러주세요!" 
+            feedback: "AI 고객이 응답을 처리하는 중입니다. 잠시 후 전송 버튼을 한 번 더 눌러주세요!" 
         });
     }
 });
